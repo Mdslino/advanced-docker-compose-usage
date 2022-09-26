@@ -1,0 +1,85 @@
+version: '3'
+
+x-app: &app
+  build:
+      context: .
+      dockerfile: Dockerfile
+  depends_on:
+    db:
+      condition: service_healthy
+    queue:
+      condition: service_healthy
+
+services:
+  app:
+    <<: *app
+    container_name: app
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    command: "gunicorn -b 0.0.0.0:8000 -k gevent sample.main:create_app() --access-logfile=- --preload -w 4"
+    profiles:
+      - web
+      - full
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthcheck"]
+      interval: 5s
+      timeout: 30s
+      retries: 5
+  
+  background:
+    <<: *app
+    container_name: background
+    command: "celery -A sample.main:celery_app worker"
+    environment:
+      - CELERY_RESULT_BACKEND=redis://cache:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@queue:5672//
+    profiles:
+      - background
+      - full
+
+  db:
+    container_name: db
+    image: postgres:alpine
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    profiles:
+      - dependecies
+      - full
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+  queue:
+    container_name: queue
+    image: rabbitmq:3-management-alpine
+    profiles:
+      - dependecies
+      - full
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+  
+  cache:
+    container_name: cache
+    image: redis:alpine
+    profiles:
+      - dependecies
+      - full
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+volumes:
+  db_data:
